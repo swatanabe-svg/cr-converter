@@ -67,28 +67,40 @@ export default function ApngMp4Converter() {
           // fps=5→20枚, 4→16枚, 3→12枚, 2→8枚（規定: 5〜20枚）
           const outName = file.name.replace(/\.mp4$/i, '.png')
           const MAX_BYTES = 300 * 1024
-          const fpsCandidates = [5, 4, 3, 2]
+          // fps × 色数の組み合わせで300KB以内に収まるまでリトライ
+          // フルカラー→パレット256色の順で試す
+          const candidates = [
+            { fps: 5, pal: false },
+            { fps: 3, pal: false },
+            { fps: 5, pal: true  },
+            { fps: 3, pal: true  },
+            { fps: 2, pal: true  },
+          ]
           let finalData = null
 
-          for (const tryFps of fpsCandidates) {
-            addLog(`試行中: fps=${tryFps} (${tryFps * 4}フレーム)...`)
+          for (const { fps: tryFps, pal } of candidates) {
+            const label = `fps=${tryFps}${pal ? ' +256色圧縮' : ''}`
+            addLog(`試行中: ${label}...`)
+            const scaleAndPad = `fps=${tryFps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`
+            const vf = pal
+              ? `${scaleAndPad},split[s0][s1];[s0]palettegen=max_colors=256:reserve_transparent=0[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3`
+              : scaleAndPad
             await ffmpeg.exec([
-              '-i', inName,
-              '-t', '4',
-              '-vf', `fps=${tryFps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`,
+              '-i', inName, '-t', '4',
+              '-vf', vf,
               '-f', 'apng', '-plays', String(loops), '-y', outName
             ])
             finalData = await ffmpeg.readFile(outName)
             const sizeKB = (finalData.buffer.byteLength / 1024).toFixed(0)
             if (finalData.buffer.byteLength <= MAX_BYTES) {
-              addLog(`✓ fps=${tryFps}, ${sizeKB}KB / 300KB以内`)
+              addLog(`✓ ${label}: ${sizeKB}KB / 300KB以内`)
               break
             }
-            addLog(`fps=${tryFps}: ${sizeKB}KB → 超過、fps下げて再試行`)
+            addLog(`${label}: ${sizeKB}KB → 超過、次の設定で再試行`)
           }
 
           if (finalData.buffer.byteLength > MAX_BYTES) {
-            addLog(`⚠️ ${(finalData.buffer.byteLength / 1024).toFixed(0)}KB: 300KBを超えています（動画が複雑すぎる可能性）`)
+            addLog(`⚠️ ${(finalData.buffer.byteLength / 1024).toFixed(0)}KB: 動画が複雑すぎて300KB以内に収められませんでした`)
           }
 
           const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'image/png' }))
