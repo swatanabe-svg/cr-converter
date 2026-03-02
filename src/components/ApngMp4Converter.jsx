@@ -10,6 +10,7 @@ export default function ApngMp4Converter() {
   const [loading, setLoading] = useState(false)
   const [drag, setDrag] = useState(false)
   const [results, setResults] = useState([])
+  const [loops, setLoops] = useState(1)
   const inputRef = useRef()
 
   const addLog = (msg) => setLog(p => p + '\n' + msg)
@@ -48,7 +49,7 @@ export default function ApngMp4Converter() {
         await ffmpeg.writeFile(inName, await fetchFile(file))
 
         if (file.name.match(/\.png$/i)) {
-          // APNG → MP4
+          // APNG → MP4（アスペクト比を保ちながら2の倍数にする）
           const outName = file.name.replace(/\.png$/i, '.mp4')
           await ffmpeg.exec([
             '-stream_loop', '-1', '-i', inName,
@@ -61,12 +62,16 @@ export default function ApngMp4Converter() {
           const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }))
           newResults.push({ name: outName, url, icon: '🎬' })
         } else {
-          // MP4 → APNG
+          // MP4 → APNG（LINE入稿規定準拠）
+          // ・サイズ: 600x400 letterbox（アスペクト比保持・パディング）
+          // ・fps=5, 最大4秒 → 最大20フレーム（規定: 5〜20枚）
+          // ・ループ数: 1〜4回（規定: 1〜4）
           const outName = file.name.replace(/\.mp4$/i, '.png')
           await ffmpeg.exec([
             '-i', inName,
-            '-vf', 'fps=24,scale=600:400:flags=lanczos',
-            '-f', 'apng', '-plays', '0', '-y', outName
+            '-t', '4',
+            '-vf', 'fps=5,scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black',
+            '-f', 'apng', '-plays', String(loops), '-y', outName
           ])
           const data = await ffmpeg.readFile(outName)
           const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }))
@@ -80,6 +85,8 @@ export default function ApngMp4Converter() {
     }
     setLoading(false)
   }
+
+  const hasMP4 = files.some(f => f.name.match(/\.mp4$/i))
 
   return (
     <div>
@@ -115,7 +122,17 @@ export default function ApngMp4Converter() {
           </div>
         )}
 
-        <div className="btn-row">
+        {hasMP4 && (
+          <div className="apng-spec-row">
+            <div className="apng-spec-badge">LINE規定</div>
+            <span className="apng-spec-text">600×400 / 5fps / 最大4秒 / ループ:</span>
+            <select className="gif-select" value={loops} onChange={e => setLoops(+e.target.value)}>
+              {[1, 2, 3, 4].map(v => <option key={v} value={v}>{v}回</option>)}
+            </select>
+          </div>
+        )}
+
+        <div className="btn-row" style={{ marginTop: hasMP4 ? 16 : 0 }}>
           <button className="btn-primary" onClick={convert} disabled={loading || !files.length}>
             {loading ? <><span className="spinner" /> 変換中...</> : '🔄  変換開始'}
           </button>
