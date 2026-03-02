@@ -35,7 +35,7 @@ export default function ApngMp4Converter() {
   const [settings, setSettings] = useState({
     outputWidth: 600,
     outputHeight: 400,
-    fps: 10,
+    fps: 5,
     loopCount: 4,
     speed: 1,
     mp4Duration: 15,
