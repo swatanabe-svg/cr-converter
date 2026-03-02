@@ -344,6 +344,89 @@ body {
 
 .download-arrow { color: #3b82f6; font-size: 18px; }
 
+/* GIF Settings */
+.gif-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.gif-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gif-label {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.gif-num {
+  width: 80px;
+  background: #111827;
+  border: 1px solid #1e2433;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+  outline: none;
+  text-align: center;
+}
+
+.gif-num:focus { border-color: #3b82f6; }
+
+.gif-lock { font-size: 14px; color: #475569; }
+
+.gif-preset {
+  padding: 6px 12px;
+  background: #111827;
+  border: 1px solid #1e2433;
+  color: #94a3b8;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.gif-preset:hover { border-color: #3b82f6; color: #60a5fa; }
+
+.gif-select {
+  background: #111827;
+  border: 1px solid #1e2433;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+}
+
+.gif-select:focus { border-color: #3b82f6; }
+
+.gif-name {
+  width: 140px;
+  background: #111827;
+  border: 1px solid #1e2433;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 14px;
+  outline: none;
+}
+
+.gif-name:focus { border-color: #3b82f6; }
+
+.gif-ext {
+  font-size: 13px;
+  color: #475569;
+}
+
 /* Log */
 .log-box {
   background: #050810;

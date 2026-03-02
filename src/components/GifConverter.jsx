@@ -12,6 +12,7 @@ export default function GifConverter() {
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(false)
   const [drag, setDrag] = useState(false)
+  const [outputName, setOutputName] = useState('output')
   const [results, setResults] = useState([])
   const inputRef = useRef()
 
@@ -48,7 +49,7 @@ export default function GifConverter() {
       for (const file of files) {
         addLog(`変換中: ${file.name}`)
         const inName = file.name
-        const outName = file.name.replace(/\.[^.]+$/, '.gif')
+        const outName = outputName ? `${outputName}.gif` : file.name.replace(/\.[^.]+$/, '.gif')
         await ffmpeg.writeFile(inName, await fetchFile(file))
         await ffmpeg.exec([
           '-i', inName,
@@ -102,25 +103,28 @@ export default function GifConverter() {
       </div>
 
       <div className="card">
-        <div className="card-title">出力設定</div>
-        <div className="settings-grid">
-          <div className="setting-item">
-            <label>幅 (px)</label>
-            <input type="number" value={width} onChange={e => setWidth(e.target.value)} />
+        <div className="gif-settings">
+          <div className="gif-row">
+            <span className="gif-label">リサイズ:</span>
+            <input className="gif-num" type="number" value={width} onChange={e => setWidth(+e.target.value)} />
+            <span className="gif-lock">🔒</span>
+            <input className="gif-num" type="number" value={height} onChange={e => setHeight(+e.target.value)} />
+            <button className="gif-preset" onClick={() => { setWidth(0); setHeight(0) }}>自由変形</button>
+            <button className="gif-preset" onClick={() => { setWidth(600); setHeight(400) }}>600×400</button>
+            <button className="gif-preset" onClick={() => { setWidth(300); setHeight(250) }}>300×250</button>
           </div>
-          <div className="setting-item">
-            <label>高さ (px)</label>
-            <input type="number" value={height} onChange={e => setHeight(e.target.value)} />
-          </div>
-          <div className="setting-item">
-            <label>フレームレート</label>
-            <select value={fps} onChange={e => setFps(e.target.value)}>
-              {[10, 15, 20, 24, 30].map(v => <option key={v}>{v} fps</option>)}
+          <div className="gif-row">
+            <span className="gif-label">FPS:</span>
+            <select className="gif-select" value={fps} onChange={e => setFps(+e.target.value)}>
+              {[10, 15, 20, 24, 30].map(v => <option key={v}>{v}</option>)}
             </select>
+            <span className="gif-label" style={{marginLeft:16}}>出力名:</span>
+            <input className="gif-name" type="text" value={outputName} onChange={e => setOutputName(e.target.value)} />
+            <span className="gif-ext">.gif</span>
           </div>
         </div>
 
-        <div className="btn-row">
+        <div className="btn-row" style={{marginTop:20}}>
           <button className="btn-primary" onClick={convert} disabled={loading || !files.length}>
             {loading ? <><span className="spinner" /> 変換中...</> : '🎞️  GIF変換を開始'}
           </button>
