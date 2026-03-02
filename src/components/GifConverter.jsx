@@ -4,15 +4,24 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util'
 
 const ffmpeg = new FFmpeg()
 
+const PRESETS = [
+  { label: '600×400', w: 600, h: 400 },
+  { label: '300×250', w: 300, h: 250 },
+]
+const FPS_OPTIONS = [5, 8, 10, 15, 20, 30]
+
 export default function GifConverter() {
   const [files, setFiles] = useState([])
-  const [width, setWidth] = useState(600)
-  const [height, setHeight] = useState(400)
-  const [fps, setFps] = useState(20)
+  const [settings, setSettings] = useState({
+    width: 300,
+    height: 250,
+    fps: 20,
+    outputName: 'output',
+  })
+  const [lockAspect, setLockAspect] = useState(false)
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(false)
   const [drag, setDrag] = useState(false)
-  const [outputName, setOutputName] = useState('output')
   const [results, setResults] = useState([])
   const inputRef = useRef()
 
@@ -38,6 +47,34 @@ export default function GifConverter() {
 
   const removeFile = (i) => setFiles(p => p.filter((_, idx) => idx !== i))
 
+  const handleWidthChange = (val) => {
+    const w = val ? Number(val) : null
+    if (lockAspect && w && settings.height) {
+      setSettings(s => ({ ...s, width: w, height: null }))
+    } else {
+      setSettings(s => ({ ...s, width: w }))
+    }
+  }
+
+  const handleHeightChange = (val) => {
+    const h = val ? Number(val) : null
+    if (lockAspect && h && settings.width) {
+      setSettings(s => ({ ...s, height: h, width: null }))
+    } else {
+      setSettings(s => ({ ...s, height: h }))
+    }
+  }
+
+  // 元のツールと同じフィルターグラフ構築
+  const buildFilterGraph = (fps, width, height) => {
+    const fpsFilter = `fps=${fps}`
+    let scaleFilter = ''
+    if (width && height) scaleFilter = `,scale=${width}:${height}:flags=lanczos`
+    else if (width)       scaleFilter = `,scale=${width}:-2:flags=lanczos`
+    else if (height)      scaleFilter = `,scale=-2:${height}:flags=lanczos`
+    return fpsFilter + scaleFilter
+  }
+
   const convert = async () => {
     if (!files.length) return
     setLoading(true)
@@ -49,22 +86,36 @@ export default function GifConverter() {
       for (const file of files) {
         addLog(`変換中: ${file.name}`)
         const inName = file.name
-        const outName = outputName ? `${outputName}.gif` : file.name.replace(/\.[^.]+$/, '.gif')
+        const outName = files.length === 1
+          ? `${settings.outputName}.gif`
+          : file.name.replace(/\.[^.]+$/, '.gif')
+        const paletteName = `palette_${Date.now()}.png`
         await ffmpeg.writeFile(inName, await fetchFile(file))
-        const scaleFilter = (width && height)
-          ? `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos`
-          : width ? `scale=${width}:-2:flags=lanczos`
-          : height ? `scale=-2:${height}:flags=lanczos`
-          : `scale=iw:ih`
+
+        const fg = buildFilterGraph(settings.fps, settings.width, settings.height)
+
+        // Pass 1: パレット生成 (元のツールと同じ stats_mode=diff)
+        addLog('パレット生成中...')
         await ffmpeg.exec([
           '-i', inName,
-          '-vf', `fps=${fps},${scaleFilter},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
-          '-y', outName
+          '-vf', `${fg},palettegen=stats_mode=diff`,
+          '-y', paletteName,
         ])
+
+        // Pass 2: パレット適用 (元のツールと同じ dither=bayer:bayer_scale=5)
+        addLog('GIF変換中...')
+        await ffmpeg.exec([
+          '-i', inName,
+          '-i', paletteName,
+          '-lavfi', `[0:v] ${fg} [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=5`,
+          '-y', outName,
+        ])
+
         const data = await ffmpeg.readFile(outName)
+        const sizeKB = (data.buffer.byteLength / 1024).toFixed(0)
         const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/gif' }))
         newResults.push({ name: outName, url })
-        addLog(`完了: ${outName} ✓`)
+        addLog(`完了: ${outName} (${sizeKB}KB) ✓`)
       }
       setResults(newResults)
     } catch (e) {
@@ -86,7 +137,7 @@ export default function GifConverter() {
         >
           <div className="drop-icon">🎬</div>
           <h3>ファイルをここにドロップ</h3>
-          <p>MP4 / APNG に対応 　クリックしてファイルを選択</p>
+          <p>MP4 / APNG に対応　　クリックしてファイルを選択</p>
           <input ref={inputRef} type="file" accept=".mp4,.png" multiple hidden
             onChange={e => setFiles(p => [...p, ...Array.from(e.target.files)])} />
         </div>
@@ -111,25 +162,43 @@ export default function GifConverter() {
         <div className="gif-settings">
           <div className="gif-row">
             <span className="gif-label">リサイズ:</span>
-            <input className="gif-num" type="number" value={width} onChange={e => setWidth(+e.target.value)} />
-            <span className="gif-lock">🔒</span>
-            <input className="gif-num" type="number" value={height} onChange={e => setHeight(+e.target.value)} />
-            <button className="gif-preset" onClick={() => { setWidth(0); setHeight(0) }}>自由変形</button>
-            <button className="gif-preset" onClick={() => { setWidth(600); setHeight(400) }}>600×400</button>
-            <button className="gif-preset" onClick={() => { setWidth(300); setHeight(250) }}>300×250</button>
+            <input
+              className="gif-num" type="number" min="80" max="1920"
+              value={settings.width ?? ''} placeholder="自動"
+              onChange={e => handleWidthChange(e.target.value)}
+            />
+            <button
+              className={`gif-lock-btn ${lockAspect ? 'active' : ''}`}
+              onClick={() => setLockAspect(v => !v)}
+              title={lockAspect ? '縦横比維持中（クリックで解除）' : 'クリックで縦横比維持'}
+            >🔒</button>
+            <input
+              className="gif-num" type="number" min="60" max="1080"
+              value={settings.height ?? ''} placeholder="自動"
+              onChange={e => handleHeightChange(e.target.value)}
+            />
+            <span className="gif-hint">{lockAspect ? '縦横比維持' : '自由変形'}</span>
+            {PRESETS.map(p => (
+              <button key={p.label} className="gif-preset"
+                onClick={() => setSettings(s => ({ ...s, width: p.w, height: p.h }))}>
+                {p.label}
+              </button>
+            ))}
           </div>
           <div className="gif-row">
             <span className="gif-label">FPS:</span>
-            <select className="gif-select" value={fps} onChange={e => setFps(+e.target.value)}>
-              {[10, 15, 20, 24, 30].map(v => <option key={v}>{v}</option>)}
+            <select className="gif-select" value={settings.fps}
+              onChange={e => setSettings(s => ({ ...s, fps: Number(e.target.value) }))}>
+              {FPS_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <span className="gif-label" style={{marginLeft:16}}>出力名:</span>
-            <input className="gif-name" type="text" value={outputName} onChange={e => setOutputName(e.target.value)} />
+            <span className="gif-label" style={{ marginLeft: 16 }}>出力名:</span>
+            <input className="gif-name" type="text" value={settings.outputName} placeholder="output"
+              onChange={e => setSettings(s => ({ ...s, outputName: e.target.value || 'output' }))} />
             <span className="gif-ext">.gif</span>
           </div>
         </div>
 
-        <div className="btn-row" style={{marginTop:20}}>
+        <div className="btn-row" style={{ marginTop: 20 }}>
           <button className="btn-primary" onClick={convert} disabled={loading || !files.length}>
             {loading ? <><span className="spinner" /> 変換中...</> : '🎞️  GIF変換を開始'}
           </button>

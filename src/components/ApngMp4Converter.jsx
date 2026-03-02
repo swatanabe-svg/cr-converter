@@ -4,15 +4,42 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util'
 
 const ffmpeg = new FFmpeg()
 
+const FPS_OPTIONS = [5, 8, 10, 15, 20]
+const SPEED_OPTIONS = [
+  { value: 0.5,  label: '0.5x' },
+  { value: 0.75, label: '0.75x' },
+  { value: 1,    label: '1.0x' },
+  { value: 1.5,  label: '1.5x' },
+  { value: 2,    label: '2.0x' },
+]
+const LOOP_OPTIONS = [1, 2, 3, 4]
+const MP4_DURATION_OPTIONS = [
+  { value: 15, label: '15秒' },
+  { value: 30, label: '30秒' },
+]
+const PRESETS = [
+  { label: '600×400', w: 600, h: 400 },
+  { label: '300×250', w: 300, h: 250 },
+]
+
 export default function ApngMp4Converter() {
   const [files, setFiles] = useState([])
+  const [settings, setSettings] = useState({
+    outputWidth: 600,
+    outputHeight: 400,
+    fps: 10,
+    loopCount: 4,
+    speed: 1,
+    mp4Duration: 15,
+    outputName: 'output',
+  })
   const [log, setLog] = useState('')
   const [loading, setLoading] = useState(false)
   const [drag, setDrag] = useState(false)
   const [results, setResults] = useState([])
-  const [loops, setLoops] = useState(1)
   const inputRef = useRef()
 
+  const set = (key, val) => setSettings(s => ({ ...s, [key]: val }))
   const addLog = (msg) => setLog(p => p + '\n' + msg)
 
   const loadFFmpeg = async () => {
@@ -35,38 +62,27 @@ export default function ApngMp4Converter() {
 
   const removeFile = (i) => setFiles(p => p.filter((_, idx) => idx !== i))
 
-  // 元のCRマルチツールと同じ圧縮アルゴリズム:
-  // 8〜256色を二分探索して299KB以内に収まる最大色数を探す
-  const compressApng = async (inName, outName, fps, loops) => {
+  // 元のツールと同じ二分探索圧縮 (lo=8, hi=256, target=299KB)
+  // filter: split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=floyd_steinberg
+  const compressApng = async (inName, outName, loopCount) => {
     const MAX_BYTES = 299 * 1024
-    const baseVf = `fps=${fps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`
-
     let lo = 8, hi = 256, bestData = null
-
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2)
-      addLog(`色数 ${mid} を試行中...`)
-
-      const vf = `${baseVf},split[a][b];[a]palettegen=max_colors=${mid}:stats_mode=diff[p];[b][p]paletteuse=dither=floyd_steinberg`
+      addLog(`  色数 ${mid} を試行中...`)
+      const vf = `split[a][b];[a]palettegen=max_colors=${mid}:stats_mode=diff[p];[b][p]paletteuse=dither=floyd_steinberg`
       await ffmpeg.exec([
-        '-i', inName, '-t', '4',
-        '-vf', vf,
-        '-f', 'apng', '-plays', String(loops), '-y', outName
+        '-i', inName, '-vf', vf,
+        '-f', 'apng', '-plays', String(loopCount), '-y', outName,
       ])
-
       const data = await ffmpeg.readFile(outName)
-      const sizeKB = (data.buffer.byteLength / 1024).toFixed(0)
-
       if (data.buffer.byteLength <= MAX_BYTES) {
         bestData = data
-        addLog(`  → ${sizeKB}KB ✓ (色数${mid}でOK、さらに増やせるか試行)`)
         lo = mid + 1
       } else {
-        addLog(`  → ${sizeKB}KB 超過 (色数${mid}はNG)`)
         hi = mid - 1
       }
     }
-
     return bestData
   }
 
@@ -84,42 +100,73 @@ export default function ApngMp4Converter() {
         await ffmpeg.writeFile(inName, await fetchFile(file))
 
         if (file.name.match(/\.png$/i)) {
-          // APNG → MP4
-          const outName = file.name.replace(/\.png$/i, '.mp4')
+          // ── APNG → MP4 ──────────────────────────────────────────
+          // 元のツール: 固定1920×1080, libx264, preset=slow, crf=18, yuv420p
+          const outName = files.length === 1
+            ? `${settings.outputName}.mp4`
+            : file.name.replace(/\.png$/i, '.mp4')
+          addLog(`APNG → MP4 (${settings.mp4Duration}秒, 1920×1080)`)
           await ffmpeg.exec([
-            '-stream_loop', '-1', '-i', inName,
-            '-vf', 'fps=24,scale=trunc(iw/2)*2:trunc(ih/2)*2',
-            '-c:v', 'libx264', '-preset', 'slow',
-            '-crf', '18', '-pix_fmt', 'yuv420p',
-            '-t', '4', '-y', outName
+            '-stream_loop', '-1',
+            '-i', inName,
+            '-vf', 'scale=1920:1080:flags=lanczos',
+            '-c:v', 'libx264',
+            '-preset', 'slow',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-t', String(settings.mp4Duration),
+            '-y', outName,
           ])
           const data = await ffmpeg.readFile(outName)
+          const sizeKB = (data.buffer.byteLength / 1024 / 1024).toFixed(1)
           const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }))
-          newResults.push({ name: outName, url, icon: '🎬' })
+          newResults.push({ name: outName, url, icon: '🎬', size: `${sizeKB}MB` })
 
         } else {
-          // MP4 → APNG（元のツールと同じ二分探索圧縮）
-          const outName = file.name.replace(/\.mp4$/i, '.png')
+          // ── MP4 → APNG ──────────────────────────────────────────
+          // 元のツール: 指定サイズ・fps・loopCount、targetMaxBytes=300KB
+          const outName = files.length === 1
+            ? `${settings.outputName}.png`
+            : file.name.replace(/\.mp4$/i, '.png')
+          const tempApng = `_tmp_${Date.now()}.png`
 
-          // fps=5で試行 → 収まらなければfps=3で再試行
-          let finalData = null
-          for (const tryFps of [5, 3, 2]) {
-            addLog(`fps=${tryFps} (${tryFps * 4}フレーム) で圧縮開始...`)
-            finalData = await compressApng(inName, outName, tryFps, loops)
-            if (finalData) break
-            addLog(`fps=${tryFps}: 8色でも超過 → fps下げて再試行`)
+          // speed フィルター (元のツール: setpts=PTS/speed)
+          const speedFilter = Math.abs(settings.speed - 1) > 0.001
+            ? `setpts=PTS/${settings.speed},` : ''
+          const vf = `${speedFilter}fps=${settings.fps},scale=${settings.outputWidth}:${settings.outputHeight}:flags=lanczos`
+
+          addLog(`MP4 → APNG (${settings.outputWidth}×${settings.outputHeight}, fps=${settings.fps}, speed=${settings.speed}x)`)
+          await ffmpeg.exec([
+            '-i', inName,
+            '-t', '4',
+            '-vf', vf,
+            '-f', 'apng',
+            '-plays', String(settings.loopCount),
+            '-y', tempApng,
+          ])
+
+          const rawData = await ffmpeg.readFile(tempApng)
+          const rawKB = (rawData.buffer.byteLength / 1024).toFixed(0)
+
+          let finalData
+          if (rawData.buffer.byteLength <= 299 * 1024) {
+            addLog(`✓ ${rawKB}KB / 300KB以内`)
+            finalData = rawData
+            // outName にコピー
+            await ffmpeg.writeFile(outName, new Uint8Array(rawData.buffer))
+          } else {
+            addLog(`${rawKB}KB → 300KB以内に圧縮中 (二分探索: 8〜256色)`)
+            finalData = await compressApng(tempApng, outName, settings.loopCount)
+            if (!finalData) {
+              addLog('⚠️ 8色でも300KB以内に収まりませんでした')
+              finalData = await ffmpeg.readFile(outName)
+            }
+            const compKB = (finalData.buffer.byteLength / 1024).toFixed(0)
+            addLog(`✓ ${compKB}KB`)
           }
 
-          if (!finalData) {
-            addLog('⚠️ 8色・fps=2でも300KB以内に収められませんでした')
-            const data = await ffmpeg.readFile(outName)
-            finalData = data
-          }
-
-          const sizeKB = (finalData.buffer.byteLength / 1024).toFixed(0)
-          addLog(`完了: ${sizeKB}KB`)
           const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'image/png' }))
-          newResults.push({ name: outName, url, icon: '🖼️' })
+          newResults.push({ name: outName, url, icon: '🖼️', size: `${(finalData.buffer.byteLength / 1024).toFixed(0)}KB` })
         }
         addLog(`完了: ${file.name} ✓`)
       }
@@ -131,6 +178,7 @@ export default function ApngMp4Converter() {
   }
 
   const hasMP4 = files.some(f => f.name.match(/\.mp4$/i))
+  const hasPNG = files.some(f => f.name.match(/\.png$/i))
 
   return (
     <div>
@@ -165,18 +213,80 @@ export default function ApngMp4Converter() {
             ))}
           </div>
         )}
+      </div>
 
-        {hasMP4 && (
-          <div className="apng-spec-row">
-            <div className="apng-spec-badge">LINE規定</div>
-            <span className="apng-spec-text">600×400 / 最大4秒 / 300KB自動圧縮 / ループ:</span>
-            <select className="gif-select" value={loops} onChange={e => setLoops(+e.target.value)}>
-              {[1, 2, 3, 4].map(v => <option key={v} value={v}>{v}回</option>)}
-            </select>
+      {/* MP4→APNG 設定 */}
+      {hasMP4 && (
+        <div className="card">
+          <div className="card-title">MP4 → APNG 設定</div>
+          <div className="gif-settings">
+            <div className="gif-row">
+              <span className="gif-label">サイズ:</span>
+              <input className="gif-num" type="number" value={settings.outputWidth}
+                onChange={e => set('outputWidth', Number(e.target.value) || 600)} min="80" max="1920" />
+              <span className="gif-lock" style={{ color: '#475569' }}>×</span>
+              <input className="gif-num" type="number" value={settings.outputHeight}
+                onChange={e => set('outputHeight', Number(e.target.value) || 400)} min="60" max="1080" />
+              {PRESETS.map(p => (
+                <button key={p.label} className="gif-preset"
+                  onClick={() => setSettings(s => ({ ...s, outputWidth: p.w, outputHeight: p.h }))}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="gif-row">
+              <span className="gif-label">FPS:</span>
+              <select className="gif-select" value={settings.fps}
+                onChange={e => set('fps', Number(e.target.value))}>
+                {FPS_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <span className="gif-label" style={{ marginLeft: 16 }}>ループ:</span>
+              <select className="gif-select" value={settings.loopCount}
+                onChange={e => set('loopCount', Number(e.target.value))}>
+                {LOOP_OPTIONS.map(v => <option key={v} value={v}>{v}回</option>)}
+              </select>
+              <span className="gif-label" style={{ marginLeft: 16 }}>速度:</span>
+              <select className="gif-select" value={settings.speed}
+                onChange={e => set('speed', Number(e.target.value))}>
+                {SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div className="gif-row">
+              <span className="gif-label">出力名:</span>
+              <input className="gif-name" type="text" value={settings.outputName} placeholder="output"
+                onChange={e => set('outputName', e.target.value || 'output')} />
+              <span className="gif-ext">.png</span>
+              <span className="apng-spec-badge" style={{ marginLeft: 8 }}>300KB自動圧縮</span>
+            </div>
           </div>
-        )}
+        </div>
+      )}
 
-        <div className="btn-row" style={{ marginTop: hasMP4 ? 16 : 0 }}>
+      {/* APNG→MP4 設定 */}
+      {hasPNG && (
+        <div className="card">
+          <div className="card-title">APNG → MP4 設定</div>
+          <div className="gif-settings">
+            <div className="gif-row">
+              <span className="gif-label">出力秒数:</span>
+              <select className="gif-select" value={settings.mp4Duration}
+                onChange={e => set('mp4Duration', Number(e.target.value))}>
+                {MP4_DURATION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <span className="gif-hint" style={{ marginLeft: 8 }}>1920×1080 / H.264 / CRF18</span>
+            </div>
+            <div className="gif-row">
+              <span className="gif-label">出力名:</span>
+              <input className="gif-name" type="text" value={settings.outputName} placeholder="output"
+                onChange={e => set('outputName', e.target.value || 'output')} />
+              <span className="gif-ext">.mp4</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="btn-row">
           <button className="btn-primary" onClick={convert} disabled={loading || !files.length}>
             {loading ? <><span className="spinner" /> 変換中...</> : '🔄  変換開始'}
           </button>
@@ -195,7 +305,7 @@ export default function ApngMp4Converter() {
                 <span className="download-item-icon">{r.icon}</span>
                 <div className="download-item-info">
                   <div className="download-item-name">{r.name}</div>
-                  <div className="download-item-label">クリックしてダウンロード</div>
+                  <div className="download-item-label">クリックしてダウンロード {r.size && `(${r.size})`}</div>
                 </div>
                 <span className="download-arrow">↓</span>
               </a>
