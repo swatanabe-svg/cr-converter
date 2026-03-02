@@ -4,6 +4,14 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util'
 
 const ffmpeg = new FFmpeg()
 
+const getYYMMDD = () => {
+  const d = new Date()
+  const yy = String(d.getFullYear()).slice(-2)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yy}${mm}${dd}`
+}
+
 const PRESETS = [
   { label: '600×400', w: 600, h: 400 },
   { label: '300×250', w: 300, h: 250 },
@@ -86,9 +94,11 @@ export default function GifConverter() {
       for (const file of files) {
         addLog(`変換中: ${file.name}`)
         const inName = file.name
-        const outName = files.length === 1
-          ? `${settings.outputName}.gif`
-          : file.name.replace(/\.[^.]+$/, '.gif')
+        const yymmdd = getYYMMDD()
+        const baseName = files.length === 1
+          ? settings.outputName
+          : file.name.replace(/\.[^.]+$/, '')
+        const outName = `${baseName}_${yymmdd}_GIF.gif`
         const paletteName = `palette_${Date.now()}.png`
         await ffmpeg.writeFile(inName, await fetchFile(file))
 

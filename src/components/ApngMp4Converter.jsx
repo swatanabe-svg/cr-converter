@@ -4,6 +4,14 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util'
 
 const ffmpeg = new FFmpeg()
 
+const getYYMMDD = () => {
+  const d = new Date()
+  const yy = String(d.getFullYear()).slice(-2)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yy}${mm}${dd}`
+}
+
 const FPS_OPTIONS = [5, 8, 10, 15, 20]
 const SPEED_OPTIONS = [
   { value: 0.5,  label: '0.5x' },
@@ -99,12 +107,14 @@ export default function ApngMp4Converter() {
         const inName = file.name
         await ffmpeg.writeFile(inName, await fetchFile(file))
 
+        const yymmdd = getYYMMDD()
         if (file.name.match(/\.png$/i)) {
           // ── APNG → MP4 ──────────────────────────────────────────
           // 元のツール: 固定1920×1080, libx264, preset=slow, crf=18, yuv420p
-          const outName = files.length === 1
-            ? `${settings.outputName}.mp4`
-            : file.name.replace(/\.png$/i, '.mp4')
+          const baseName = files.length === 1
+            ? settings.outputName
+            : file.name.replace(/\.png$/i, '')
+          const outName = `${baseName}_${yymmdd}_APNG動画.mp4`
           addLog(`APNG → MP4 (${settings.mp4Duration}秒, 1920×1080)`)
           await ffmpeg.exec([
             '-stream_loop', '-1',
@@ -125,9 +135,10 @@ export default function ApngMp4Converter() {
         } else {
           // ── MP4 → APNG ──────────────────────────────────────────
           // 元のツール: 指定サイズ・fps・loopCount、targetMaxBytes=300KB
-          const outName = files.length === 1
-            ? `${settings.outputName}.png`
-            : file.name.replace(/\.mp4$/i, '.png')
+          const baseName = files.length === 1
+            ? settings.outputName
+            : file.name.replace(/\.mp4$/i, '')
+          const outName = `${baseName}_${yymmdd}_APNG.png`
           const tempApng = `_tmp_${Date.now()}.png`
 
           // 元のツールと同じ: sourceDuration = 1 / speed を -i の前に指定
