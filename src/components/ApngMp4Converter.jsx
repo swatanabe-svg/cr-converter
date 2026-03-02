@@ -130,15 +130,18 @@ export default function ApngMp4Converter() {
             : file.name.replace(/\.mp4$/i, '.png')
           const tempApng = `_tmp_${Date.now()}.png`
 
-          // speed フィルター (元のツール: setpts=PTS/speed)
+          // 元のツールと同じ: sourceDuration = 1 / speed を -i の前に指定
+          // speed=1(デフォルト) → 1秒読み込み → fps=10で10フレーム
+          const sourceDuration = 1 / settings.speed
           const speedFilter = Math.abs(settings.speed - 1) > 0.001
             ? `setpts=PTS/${settings.speed},` : ''
           const vf = `${speedFilter}fps=${settings.fps},scale=${settings.outputWidth}:${settings.outputHeight}:flags=lanczos`
+          const frameCount = Math.round(settings.fps * sourceDuration)
 
-          addLog(`MP4 → APNG (${settings.outputWidth}×${settings.outputHeight}, fps=${settings.fps}, speed=${settings.speed}x)`)
+          addLog(`MP4 → APNG (${settings.outputWidth}×${settings.outputHeight}, fps=${settings.fps}, ${sourceDuration}秒, ${frameCount}フレーム)`)
           await ffmpeg.exec([
+            '-t', String(sourceDuration),  // -i の前 = 入力時間制限（元のツールと同じ）
             '-i', inName,
-            '-t', '4',
             '-vf', vf,
             '-f', 'apng',
             '-plays', String(settings.loopCount),
@@ -250,6 +253,22 @@ export default function ApngMp4Converter() {
                 onChange={e => set('speed', Number(e.target.value))}>
                 {SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              {(() => {
+                // 元のツールと同じ計算:
+                // sourceDuration = 1/speed, setpts=PTS/speed → outputDuration = 1/speed²
+                // frames = fps × outputDuration = fps/speed²
+                const outputDuration = 1 / (settings.speed ** 2)
+                const frames = Math.round(settings.fps / (settings.speed ** 2))
+                const inSpec = frames >= 5 && frames <= 20 && outputDuration >= 1 && outputDuration <= 4
+                return (
+                  <span className={`gif-hint ${!inSpec ? 'spec-warn' : ''}`} style={{ marginLeft: 12 }}>
+                    → {outputDuration.toFixed(2)}秒 / {frames}フレーム
+                    {frames < 5 && ' ⚠️ LINE規定: 最小5フレーム'}
+                    {frames > 20 && ' ⚠️ LINE規定: 最大20フレーム'}
+                    {outputDuration > 4 && ' ⚠️ LINE規定: 最大4秒'}
+                  </span>
+                )
+              })()}
             </div>
             <div className="gif-row">
               <span className="gif-label">出力名:</span>
