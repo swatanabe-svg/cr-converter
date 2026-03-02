@@ -62,19 +62,36 @@ export default function ApngMp4Converter() {
           const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }))
           newResults.push({ name: outName, url, icon: '🎬' })
         } else {
-          // MP4 → APNG（LINE入稿規定準拠）
-          // ・サイズ: 600x400 letterbox（アスペクト比保持・パディング）
-          // ・fps=5, 最大4秒 → 最大20フレーム（規定: 5〜20枚）
-          // ・ループ数: 1〜4回（規定: 1〜4）
+          // MP4 → APNG（LINE入稿規定準拠・300KB以内に自動調整）
+          // fps を下げながら 300KB 以内に収まるまでリトライ
+          // fps=5→20枚, 4→16枚, 3→12枚, 2→8枚（規定: 5〜20枚）
           const outName = file.name.replace(/\.mp4$/i, '.png')
-          await ffmpeg.exec([
-            '-i', inName,
-            '-t', '4',
-            '-vf', 'fps=5,scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black',
-            '-f', 'apng', '-plays', String(loops), '-y', outName
-          ])
-          const data = await ffmpeg.readFile(outName)
-          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }))
+          const MAX_BYTES = 300 * 1024
+          const fpsCandidates = [5, 4, 3, 2]
+          let finalData = null
+
+          for (const tryFps of fpsCandidates) {
+            addLog(`試行中: fps=${tryFps} (${tryFps * 4}フレーム)...`)
+            await ffmpeg.exec([
+              '-i', inName,
+              '-t', '4',
+              '-vf', `fps=${tryFps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`,
+              '-f', 'apng', '-plays', String(loops), '-y', outName
+            ])
+            finalData = await ffmpeg.readFile(outName)
+            const sizeKB = (finalData.buffer.byteLength / 1024).toFixed(0)
+            if (finalData.buffer.byteLength <= MAX_BYTES) {
+              addLog(`✓ fps=${tryFps}, ${sizeKB}KB / 300KB以内`)
+              break
+            }
+            addLog(`fps=${tryFps}: ${sizeKB}KB → 超過、fps下げて再試行`)
+          }
+
+          if (finalData.buffer.byteLength > MAX_BYTES) {
+            addLog(`⚠️ ${(finalData.buffer.byteLength / 1024).toFixed(0)}KB: 300KBを超えています（動画が複雑すぎる可能性）`)
+          }
+
+          const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'image/png' }))
           newResults.push({ name: outName, url, icon: '🖼️' })
         }
         addLog(`完了: ${file.name} ✓`)
