@@ -1,8 +1,37 @@
 import { useState, useRef, useCallback } from 'react'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import UPNG from 'upng-js'
 
 const ffmpeg = new FFmpeg()
+
+// CRC32（APNGのacTLチャンク書き換えに使用）
+function crc32(buf) {
+  const table = new Int32Array(256)
+  for (let i = 0; i < 256; i++) {
+    let c = i
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1)
+    table[i] = c
+  }
+  let crc = -1
+  for (const b of buf) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8)
+  return (crc ^ -1) >>> 0
+}
+
+// APNGバイナリのacTLチャンクにループ数を書き込む
+function patchAPNGLoops(buffer, loops) {
+  const data = new Uint8Array(buffer.slice(0))
+  const view = new DataView(data.buffer)
+  for (let i = 8; i < data.length - 12; i++) {
+    if (data[i] === 0x61 && data[i+1] === 0x63 && data[i+2] === 0x54 && data[i+3] === 0x4C) {
+      view.setUint32(i + 8, loops, false) // num_plays
+      const crc = crc32(data.subarray(i, i + 12))
+      view.setUint32(i + 12, crc, false)
+      break
+    }
+  }
+  return data.buffer
+}
 
 export default function ApngMp4Converter() {
   const [files, setFiles] = useState([])
@@ -61,49 +90,47 @@ export default function ApngMp4Converter() {
           const data = await ffmpeg.readFile(outName)
           const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }))
           newResults.push({ name: outName, url, icon: '🎬' })
+
         } else {
-          // MP4 → APNG（LINE入稿規定準拠・300KB以内に自動調整）
-          // fps を下げながら 300KB 以内に収まるまでリトライ
-          // fps=5→20枚, 4→16枚, 3→12枚, 2→8枚（規定: 5〜20枚）
+          // MP4 → APNG（LINE入稿規定準拠・upng-jsで300KB以内に自動圧縮）
           const outName = file.name.replace(/\.mp4$/i, '.png')
           const MAX_BYTES = 300 * 1024
-          // fps × 色数の組み合わせで300KB以内に収まるまでリトライ
-          // フルカラー→パレット256色の順で試す
-          const candidates = [
-            { fps: 5, pal: false },
-            { fps: 3, pal: false },
-            { fps: 5, pal: true  },
-            { fps: 3, pal: true  },
-            { fps: 2, pal: true  },
-          ]
-          let finalData = null
+          const fpsCandidates = [5, 3, 2]
+          let finalBuffer = null
 
-          for (const { fps: tryFps, pal } of candidates) {
-            const label = `fps=${tryFps}${pal ? ' +256色圧縮' : ''}`
-            addLog(`試行中: ${label}...`)
-            const scaleAndPad = `fps=${tryFps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`
-            const vf = pal
-              ? `${scaleAndPad},split[s0][s1];[s0]palettegen=max_colors=256:reserve_transparent=0[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3`
-              : scaleAndPad
+          for (const tryFps of fpsCandidates) {
+            addLog(`変換中: fps=${tryFps} (${tryFps * 4}フレーム)...`)
             await ffmpeg.exec([
               '-i', inName, '-t', '4',
-              '-vf', vf,
-              '-f', 'apng', '-compression_level', '9', '-plays', String(loops), '-y', outName
+              '-vf', `fps=${tryFps},scale=600:400:force_original_aspect_ratio=decrease:flags=lanczos,pad=600:400:(ow-iw)/2:(oh-ih)/2:color=black`,
+              '-f', 'apng', '-compression_level', '9', '-plays', '1', '-y', outName
             ])
-            finalData = await ffmpeg.readFile(outName)
-            const sizeKB = (finalData.buffer.byteLength / 1024).toFixed(0)
-            if (finalData.buffer.byteLength <= MAX_BYTES) {
-              addLog(`✓ ${label}: ${sizeKB}KB / 300KB以内`)
+            const rawData = await ffmpeg.readFile(outName)
+
+            // upng-jsで256色に圧縮（TinyPNG相当）
+            addLog(`圧縮中...`)
+            const dec = UPNG.decode(rawData.buffer)
+            const frames = UPNG.toRGBA8(dec)
+            const delayMs = Math.round(1000 / tryFps)
+            const delays = new Array(frames.length).fill(delayMs)
+            const compressed = UPNG.encode(frames, dec.width, dec.height, 256, delays)
+
+            // ループ数をバイナリに書き込む
+            finalBuffer = patchAPNGLoops(compressed, loops)
+            const sizeKB = (finalBuffer.byteLength / 1024).toFixed(0)
+
+            if (finalBuffer.byteLength <= MAX_BYTES) {
+              addLog(`✓ fps=${tryFps}, ${sizeKB}KB / 300KB以内`)
               break
             }
-            addLog(`${label}: ${sizeKB}KB → 超過、次の設定で再試行`)
+            addLog(`fps=${tryFps}: ${sizeKB}KB → 超過、fps下げて再試行`)
           }
 
-          if (finalData.buffer.byteLength > MAX_BYTES) {
-            addLog(`⚠️ ${(finalData.buffer.byteLength / 1024).toFixed(0)}KB: 動画が複雑すぎて300KB以内に収められませんでした`)
+          if (finalBuffer.byteLength > MAX_BYTES) {
+            addLog(`⚠️ ${(finalBuffer.byteLength / 1024).toFixed(0)}KB: 動画が複雑すぎて300KB以内に収められませんでした`)
           }
 
-          const url = URL.createObjectURL(new Blob([finalData.buffer], { type: 'image/png' }))
+          const url = URL.createObjectURL(new Blob([finalBuffer], { type: 'image/png' }))
           newResults.push({ name: outName, url, icon: '🖼️' })
         }
         addLog(`完了: ${file.name} ✓`)
@@ -154,7 +181,7 @@ export default function ApngMp4Converter() {
         {hasMP4 && (
           <div className="apng-spec-row">
             <div className="apng-spec-badge">LINE規定</div>
-            <span className="apng-spec-text">600×400 / 5fps / 最大4秒 / ループ:</span>
+            <span className="apng-spec-text">600×400 / 最大4秒 / 256色圧縮 / ループ:</span>
             <select className="gif-select" value={loops} onChange={e => setLoops(+e.target.value)}>
               {[1, 2, 3, 4].map(v => <option key={v} value={v}>{v}回</option>)}
             </select>
