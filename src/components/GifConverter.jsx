@@ -51,9 +51,14 @@ export default function GifConverter() {
         const inName = file.name
         const outName = outputName ? `${outputName}.gif` : file.name.replace(/\.[^.]+$/, '.gif')
         await ffmpeg.writeFile(inName, await fetchFile(file))
+        const scaleFilter = (width && height)
+          ? `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos`
+          : width ? `scale=${width}:-2:flags=lanczos`
+          : height ? `scale=-2:${height}:flags=lanczos`
+          : `scale=iw:ih`
         await ffmpeg.exec([
           '-i', inName,
-          '-vf', `fps=${fps},scale=${width}:${height}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
+          '-vf', `fps=${fps},${scaleFilter},split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse`,
           '-y', outName
         ])
         const data = await ffmpeg.readFile(outName)
