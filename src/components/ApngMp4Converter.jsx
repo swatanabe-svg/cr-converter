@@ -88,7 +88,7 @@ export default function ApngMp4Converter() {
             await ffmpeg.exec([
               '-i', inName, '-t', '4',
               '-vf', vf,
-              '-f', 'apng', '-plays', String(loops), '-y', outName
+              '-f', 'apng', '-compression_level', '9', '-plays', String(loops), '-y', outName
             ])
             finalData = await ffmpeg.readFile(outName)
             const sizeKB = (finalData.buffer.byteLength / 1024).toFixed(0)
